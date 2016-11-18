@@ -31,8 +31,10 @@ from glob import glob
 from itertools import combinations
 from multiprocessing import Pool, cpu_count
 from optparse import OptionParser
-
-from Bio import SeqIO
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+from Bio.SubsMat.MatrixInfo import pam250 as scoring_matrix
+from Bio import pairwise2
 
 from functions import *
 from munkres import Munkres
@@ -185,7 +187,7 @@ def generate_dist_matrix(parms):
     cluster2 = parms[1]
     dist_method = parms[2]
     anchor_domains = parms[3]
-    
+
     cluster_file1 = os.path.join(output_folder, cluster1 + ".pfs")
     cluster_file2 = os.path.join(output_folder, cluster2 + ".pfs")
     
@@ -212,7 +214,9 @@ def generate_dist_matrix(parms):
         dist, jaccard, dds, gk, rDDSna, rDDS, S, Sa = cluster_distance(cluster1, cluster2, A, B, anchor_domains) #sequence dist
     elif dist_method == "domain_dist":
         dist, jaccard, dds, gk, rDDSna, rDDS, S, Sa = Distance_modified(A, B, 0, 4) #domain dist
-        
+    elif dist_method == "pairwise":
+        dist, jaccard, dds, gk, rDDSna, rDDS, S, Sa = cluster_distance_pairwise_align(cluster1, cluster2,
+                                                                                      output_folder,anchor_domains)
     if dist == 0:
         logscore = float("inf")
     else:
@@ -226,7 +230,6 @@ def generate_dist_matrix(parms):
     network_row = [str(cluster1), str(cluster2), group_dct[cluster1][0],group_dct[cluster1][1], \
         group_dct[cluster2][0],group_dct[cluster2][1], str(logscore), str(dist), str((1-dist)**2), \
         jaccard, dds, gk, rDDSna, rDDS, S, Sa]
-    
     return network_row
     
         
@@ -239,7 +242,6 @@ def generate_network(cluster_pairs, cores):
     #Assigns the data to the different workers and pools the results back into
     # the network_matrix variable
     network_matrix = pool.map(generate_dist_matrix, cluster_pairs)
-    
     # --- Serialized version of distance calculation ---
     # For the time being, use this if you have memory issues
     #network_matrix = []
@@ -252,8 +254,183 @@ def generate_network(cluster_pairs, cores):
         network_matrix_dict[row[0], row[1]] = row[2:]
     
     return network_matrix_dict
-    
-    
+
+def cluster_distance_pairwise_align(A, B, outputdir,  anchor_domains):
+    try:
+        """Compare two clusters using information on their domains, and the sequences of the domains this
+        version of the script does not need the BGCs or DMS dictionary but requires the pfs and pfd files
+        """
+        ## Check and load required files for the cluster
+        if os.path.isfile(os.path.join(outputdir, A + '.pfd')):
+            clusterA_pfd_handle = os.path.join(outputdir, A + '.pfd')
+        else:
+            print "No PFD file for %s" % A
+            raise Exception
+
+        if os.path.isfile(os.path.join(outputdir, B + '.pfd')):
+            clusterB_pfd_handle = os.path.join(outputdir, B + '.pfd')
+        else:
+            print "No PFD file for %s" % B
+            raise Exception
+
+        if os.path.isfile(os.path.join(outputdir, A + '.fasta')):
+            clusterA_fasta_handle = os.path.join(outputdir, A + '.fasta')
+            clusterA_fasta_dict = fasta_parser(open(clusterA_fasta_handle))
+        else:
+            print "No Fasta file for %s" % A
+            raise Exception
+        if os.path.isfile(os.path.join(outputdir, B + '.fasta')):
+            clusterB_fasta_handle = os.path.join(outputdir, B + '.fasta')
+            clusterB_fasta_dict = fasta_parser(open(clusterB_fasta_handle))
+        else:
+            print "No Fasta file for %s" % B
+            raise Exception
+
+        clusterA,A_list = parsePFD(clusterA_pfd_handle)
+        clusterB,B_list = parsePFD(clusterB_pfd_handle)
+
+        A_domlist = set(A_list)
+        B_domlist = set(B_list)
+
+        intersect = set(A_domlist).intersection(B_domlist)
+        not_intersect = set(A_domlist).symmetric_difference(set(B_domlist))
+
+        # JACCARD INDEX
+        Jaccard = len(intersect) / float(len(set(A_domlist)) + len(set(B_domlist)) - len(intersect))
+
+        # DDS INDEX
+        # domain_difference: Difference in sequence per domain. If one cluster doesn't have a domain at all, but the other does,
+        # this is a sequence difference of 1. If both clusters contain the domain once, and the sequence is the same, there is a seq diff of 0.
+        # S: Max occurence of each domain
+        domain_difference_anchor, S_anchor = 0, 0
+        domain_difference, S = 0, 0
+        gap_open = -15
+        gap_extend = -6.67
+
+        pair = ""  # pair of clusters to access their sequence identity
+
+        # Case 1
+        for unshared_domain in not_intersect:  # no need to look at seq identity, since these domains are unshared
+            # for each occurence of an unshared domain do domain_difference += count of domain and S += count of domain
+            unshared_occurrences = []
+            if unshared_domain in A_domlist:
+                unshared_occurrences = clusterA[unshared_domain]
+            else:
+                unshared_occurrences = clusterB[unshared_domain]
+
+            # don't look at domain version, hence the split
+            if unshared_domain.split(".")[0] in anchor_domains:
+                domain_difference_anchor += len(unshared_occurrences)
+            else:
+                domain_difference += len(unshared_occurrences)
+        print A,B,domain_difference,domain_difference_anchor
+        S = domain_difference  # can be done because it's the first use of these
+        S_anchor = domain_difference_anchor
+
+        #These are the cases for all the shared domains
+        for shared_domain in intersect:
+            # First we want to index all the sequences of the domains in a dictionary
+            domIdxA = clusterA[shared_domain]
+            domIdxB = clusterB[shared_domain]
+            if A == 'A164_AS1_SC01.cluster001' and B == 'A353_AS3_SC1.cluster024':
+                print A,B,shared_domain,domIdxA,domIdxB
+            domDictA = dict()
+            for domain in domIdxA:
+                geneID,(domStart,domEnd) = domain
+                domDictA[domain] = clusterA_fasta_dict['>'+geneID][domStart:domEnd]
+
+            domDictB = dict()
+            for domain in domIdxB:
+                geneID,(domStart,domEnd) = domain
+                domDictB[domain] = clusterB_fasta_dict['>'+geneID][domStart:domEnd]
+
+            clusAsize = len(domDictA)
+            clusBsize = len(domDictB)
+
+            scoreMatrix = np.ndarray((clusAsize,clusBsize))
+            # Get all of the instances of the domain from cluster A and cluster B and populate a similarity matrix
+            for i,domA in enumerate(domIdxA):
+                for j,domB in enumerate(domIdxB):
+
+                    seqA = domDictA[domA]
+                    seqB = domDictB[domB]
+
+                    # this will guarantee that youll always get symmetry with comparisons by ordering it alphabetically
+                    # but we'll lose accuracy and won't be able to recover the alignments
+
+                    if seqA > seqB:
+                        seqB,seqA = seqA,seqB
+                    # Using BioPython
+                    alignScore = pairwise2.align.globalds(seqA, seqB, scoring_matrix, gap_open, gap_extend)
+                    # calculate percent similarity from best scoring alignment
+                    bestAlignment = alignScore[0]
+                    alignA = bestAlignment[0]
+                    alignB = bestAlignment[1]
+                    posCtr = 0.
+                    for (a,b) in zip(alignA,alignB):
+                        if a == '-' or b == '-':
+                            pass
+                        else:
+                            if a == b:
+                                posCtr += 1
+                    # score is 1 - % identity since we want to define a distance to minimize
+                    scoreMatrix[i,j] = 1 - posCtr/len(alignA)
+            # used scipy's linear_sum_assigment to do the hungarian algorithm, haven't tested Munkres for behaviour
+
+            pairings = [(x,y) for x,y in zip(*linear_sum_assignment(scoreMatrix)) if (x<clusAsize) and (y<clusBsize)]
+            # total distance from all of the paired domains
+            accumulated_distance = sum(scoreMatrix[a] for a in pairings)
+            # to get the total sequence distance you need to add the unpaired domains
+            sum_seq_dist = accumulated_distance + abs(len(domIdxA) - len(domIdxB))
+            # update the DDS or DDS_anchor and total domain counts depending on whether or not the domain is an anchor domain
+            if shared_domain.split(".")[0] in anchor_domains:
+                S_anchor += max(len(domIdxA),len(domIdxB))
+                domain_difference_anchor += sum_seq_dist
+            else:
+                S += max(len(domIdxA),len(domIdxB))
+                domain_difference += sum_seq_dist
+
+        if S_anchor != 0 and S != 0:
+            DDS_non_anchor = domain_difference / float(S)
+            DDS_anchor = domain_difference_anchor / float(S_anchor)
+
+            # Calculate proper, proportional weight to each kind of domain
+            non_anchor_prct = S / float(S + S_anchor)
+            anchor_prct = S_anchor / float(S + S_anchor)
+
+            # boost anchor subcomponent and re-normalize
+            non_anchor_weight = non_anchor_prct / (anchor_prct * anchorweight + non_anchor_prct)
+            anchor_weight = anchor_prct * anchorweight / (anchor_prct * anchorweight + non_anchor_prct)
+
+            # Use anchorweight parameter to boost percieved rDDS_anchor
+            DDS = (non_anchor_weight * DDS_non_anchor) + (anchor_weight * DDS_anchor)
+
+        elif S_anchor == 0:
+            DDS_non_anchor = domain_difference / float(S)
+            DDS_anchor = 0.0
+            DDS = DDS_non_anchor
+
+        else:  # only anchor domains were found
+            DDS_non_anchor = 0.0
+            DDS_anchor = domain_difference_anchor / float(S_anchor)
+            DDS = DDS_anchor
+
+        DDS = 1 - DDS  # transform into similarity
+        # GK INDEX
+        #  calculate the Goodman-Kruskal gamma index
+        Ar = [item for item in A_list]
+        Ar.reverse()
+        GK = max([calculate_GK(A_list, B_list, nbhood), calculate_GK(Ar, B_list, nbhood)])
+
+        Distance = 1 - (Jaccardw * Jaccard) - (DDSw * DDS) - (GKw * GK)
+        if Distance < 0:
+            print("Negative distance detected!")
+            print("J: " + str(Jaccard) + "\tDDS: " + str(DDS) + "\tGK: " + str(GK))
+            print("Jw: " + str(Jaccardw) + "\tDDSw: " + str(DDSw) + "\tGKw: " + str(GKw))
+            sys.exit()
+    except TypeError:
+        print A, B
+    return Distance, Jaccard, DDS, GK, DDS_non_anchor, DDS_anchor, S, S_anchor
        
 def cluster_distance(A, B, A_domlist, B_domlist, anchor_domains): 
     """Compare two clusters using information on their domains, and the sequences of the domains"""    
@@ -833,6 +1010,10 @@ def CMD_parser():
     parser.add_option("-n", "--nbhood", dest="nbhood", default=4,
                       help="nbhood variable for the GK distance metric, default is set to 4.")
 
+    parser.add_option("--pairwise",dest="pairwise",action="store_true",default =False,
+                      help="Will skip mafft and calculate the network distances on the fly to generate the network, "
+                           "requires pfd and pfs files to calculate the network. Need to reconcile this with skip_mafft")
+
     (options, args) = parser.parse_args()
     return options, args
 
@@ -1152,7 +1333,6 @@ if __name__=="__main__":
     
     print("\n\n   - - Calculating distance matrix - -")
     
-    
     # Distance without taking sequence similarity between specific domains into account
     if domaindist_networks:
         if options.skip_all: #read already calculated distances
@@ -1212,7 +1392,6 @@ if __name__=="__main__":
                                                  include_disc_nodes)
                             # Need to calculate the networks per sample from the all-v-all network matrix
     # Check whether user wants seqdist method networks before calculating DMS
-
     if seqdist_networks:
         if options.skip_all:
             print(" Trying to read already calculated network file...")
@@ -1222,7 +1401,7 @@ if __name__=="__main__":
             else:
                 sys.exit("  File networkfile_seqdist_all_vs_all_c1.network could not be found!")
             
-        elif options.skip_mafft:
+        elif options.skip_mafft and options.pairwise is False:
             print(" Trying to read domain alignments (DMS.dict file)")
             if os.path.isfile(os.path.join(output_folder, "DMS.dict")):
                 DMS = {}
@@ -1230,8 +1409,8 @@ if __name__=="__main__":
                     DMS = pickle.load(DMS_file)
             else:
                 sys.exit("  File DMS.dict could not be found!")
-                
-        else:
+
+        elif options.pairwise is False:
             DMS = {}
             fasta_domains = get_domain_fastas(domainsout, output_folder)
 
@@ -1306,11 +1485,13 @@ if __name__=="__main__":
             if not options.skip_all:
                 print(" Calculating all pairwise distances")
                 pairs = set(map(tuple, map(sorted, combinations(clusters, 2))))
-                cluster_pairs = [(x, y, "seqdist", anchor_domains) for (x, y) in pairs]
+                if options.pairwise is True:
+                    cluster_pairs = [(x, y, "pairwise", anchor_domains) for (x, y) in pairs]
+                else:
+                    cluster_pairs = [(x, y, "seqdist", anchor_domains) for (x, y) in pairs]
                 network_matrix = generate_network(cluster_pairs, cores)
             for cutoff in cutoff_list:
                 write_network_matrix(network_matrix, cutoff, os.path.join(output_folder, networks_folder, "networkfile_seqdist_all_vs_all_c" + cutoff + ".network"), include_disc_nodes)
-                
         if "S" in seqdist_networks:
             if len(sampleDict) == 1 and "A" in seqdist_networks:
                 print("\nNOT generating networks per sample (only one sample, covered in the all-vs-all case)")
@@ -1322,7 +1503,10 @@ if __name__=="__main__":
                         print(" Warning: Sample size = 1 detected. Not generating network for this sample (" + sample + ")")
                     else:
                         pairs = set(map(tuple, map(sorted, combinations(sampleClusters, 2))))
-                        cluster_pairs = [(x, y, "seqdist", anchor_domains) for (x, y) in pairs]
+                        if options.pairwise is True:
+                            cluster_pairs = [(x, y, "pairwise", anchor_domains) for (x, y) in pairs]
+                        else:
+                            cluster_pairs = [(x, y, "seqdist", anchor_domains) for (x, y) in pairs]
                         network_matrix_sample = {}
                         if "A" in seqdist_networks or options.skip_all:
                             for pair in pairs:

@@ -21,6 +21,7 @@ from encodings import gbk
 from Bio import SeqIO
 import copy
 import math
+from collections import defaultdict
 
 global verbose
 verbose = False
@@ -858,3 +859,16 @@ def write_parameters(output_folder, options):
         pf.write("\n")
 
     pf.close()
+
+def parsePFD(pfdFile):
+    clusterDict = defaultdict(list)
+    domList = []
+    with open(pfdFile) as PFDhandle:
+        for line in PFDhandle:
+            line_parse = line.split('\t')
+            line_parse = [x.strip() for x in line_parse]
+            # gene idx, location
+            domList.append(line_parse[5])
+            clusterDict[line_parse[5]].append((line_parse[-1],
+                                              tuple(map(int,(line_parse[3],line_parse[4])))))
+    return clusterDict,domList
