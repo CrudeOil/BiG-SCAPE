@@ -323,7 +323,6 @@ def cluster_distance_pairwise_align(A, B, outputdir,  anchor_domains):
                 domain_difference_anchor += len(unshared_occurrences)
             else:
                 domain_difference += len(unshared_occurrences)
-        print A,B,domain_difference,domain_difference_anchor
         S = domain_difference  # can be done because it's the first use of these
         S_anchor = domain_difference_anchor
 
@@ -332,8 +331,6 @@ def cluster_distance_pairwise_align(A, B, outputdir,  anchor_domains):
             # First we want to index all the sequences of the domains in a dictionary
             domIdxA = clusterA[shared_domain]
             domIdxB = clusterB[shared_domain]
-            if A == 'A164_AS1_SC01.cluster001' and B == 'A353_AS3_SC1.cluster024':
-                print A,B,shared_domain,domIdxA,domIdxB
             domDictA = dict()
             for domain in domIdxA:
                 geneID,(domStart,domEnd) = domain
@@ -428,8 +425,8 @@ def cluster_distance_pairwise_align(A, B, outputdir,  anchor_domains):
             print("J: " + str(Jaccard) + "\tDDS: " + str(DDS) + "\tGK: " + str(GK))
             print("Jw: " + str(Jaccardw) + "\tDDSw: " + str(DDSw) + "\tGKw: " + str(GKw))
             sys.exit()
-    except TypeError:
-        print A, B
+    except KeyError:
+        print A, B,shared_domain
     return Distance, Jaccard, DDS, GK, DDS_non_anchor, DDS_anchor, S, S_anchor
        
 def cluster_distance(A, B, A_domlist, B_domlist, anchor_domains): 
@@ -474,51 +471,53 @@ def cluster_distance(A, B, A_domlist, B_domlist, anchor_domains):
     S = domain_difference # can be done because it's the first use of these
     S_anchor = domain_difference_anchor
         
-        
+
     for shared_domain in intersect:
         seta = clusterA[shared_domain]
         setb = clusterB[shared_domain]
-        
+
         # Case 2: The shared domains occurs only once in each gene cluster
-        if len(seta+setb) == 2: #The domain occurs only once in both clusters   
+        if len(seta+setb) == 2: #The domain occurs only once in both clusters
             pair = tuple(sorted([seta[0],setb[0]]))
-            
+
             try:
                 seq_dist = 1-DMS[shared_domain][pair][0] #1-sequence_similarity
             except KeyError:
                 print("For some reason, a sequence similarity value could not be retrieved from DMS...")
                 print(shared_domain + ": " + pair)
+                print(A, B)
                 print(str(DMS[shared_domain]))
                 sys.exit("(Case 2)")
-            
-            if shared_domain.split(".")[0] in anchor_domains: 
+
+            if shared_domain.split(".")[0] in anchor_domains:
                 S_anchor += 1
-                domain_difference_anchor += seq_dist 
+                domain_difference_anchor += seq_dist
             else:
                 S += 1
                 domain_difference += seq_dist
-                
+
         # Case 3: The domain occurs more than once in both clusters
         else:
             accumulated_distance = 0
-            
+
             # Fill distance matrix between domain's A and B versions
             DistanceMatrix = [[1 for col in range(len(setb))] for row in range(len(seta))]
             for domsa in range(len(seta)):
                 for domsb in range(len(setb)):
                     pair = tuple(sorted([seta[domsa], setb[domsb]]))
-                    
+
                     try:
                         Similarity = DMS[shared_domain][pair][0] # the [1] key holds the sequence length
                     except KeyError:
                         print("For some reason, a sequence similarity value could not be retrieved from DMS...")
                         print(shared_domain + ": " + pair)
+                        print(A,B)
                         print(str(DMS[shared_domain]))
                         sys.exit("(Case 3)")
-                        
+
                     seq_dist = 1-Similarity
                     DistanceMatrix[domsa][domsb] = seq_dist
-                
+
             #Only use the best scoring pairs
             Hungarian = Munkres()
             #print "DistanceMatrix", DistanceMatrix
@@ -526,11 +525,11 @@ def cluster_distance(A, B, A_domlist, B_domlist, anchor_domains):
             #print "BestIndexes", BestIndexes
             accumulated_distance = sum([DistanceMatrix[bi[0]][bi[1]] for bi in BestIndexes])
             #print "accumulated_distance", accumulated_distance
-            
+
             # the difference in number of domains accounts for the "lost" (or not duplicated) domains
             sum_seq_dist = (abs(len(seta)-len(setb)) + accumulated_distance)  #essentially 1-sim
-            
-            if shared_domain.split(".")[0] in anchor_domains: 
+
+            if shared_domain.split(".")[0] in anchor_domains:
                 S_anchor += max(len(seta),len(setb))
                 domain_difference_anchor += sum_seq_dist
             else:
@@ -749,7 +748,21 @@ def generateFasta(gbkfilePath,outputdir):
                             prot_seq = nt_seq[:-2].translate()
                     else:
                         prot_seq = nt_seq.translate()
-
+            # check protein seq for uniformity
+            pamAAs = 'ABCDEFGHIKLMNPQRSTVWXYZ'
+            fixed_seq = []
+            for amino_acid in prot_seq:
+                if amino_acid in pamAAs:
+                    fixed_seq.append(amino_acid)
+                else:
+                    print("Warning Non-standard Amino Acid: %s, Replacing it" % amino_acid)
+                    # selenocysteine
+                    if amino_acid == 'U':
+                        fixed_seq.append('C')
+                    # give up
+                    else:
+                        fixed_seq.append('X')
+            prot_seq = ''.join(fixed_seq)
             # write fasta file
             with open(outputfile,'ab') as fastaHandle:
                 # final check to see if string is empty
