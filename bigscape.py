@@ -1920,7 +1920,7 @@ def clusterJsonBatch(bgcs, pathBase, className, matrix, pos_alignments, cutoffs=
     return family_data
 
 def writeFamilySummary(network_files_folder):
-    clusteringFiles = glob('*/*clustering*tsv')
+    clusteringFiles = glob(os.path.join(network_files_folder,'*/*clustering*tsv'))
 
     classes = dict()
     for clusteringfile in clusteringFiles:
