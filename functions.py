@@ -436,7 +436,7 @@ def domtable_parser(gbk, dom_file):
                 
                 pfd_row.append(splitline[13]) #add the score
 
-                header_list = splitline[3].split(":")
+                header_list = splitline[0].split(":")
                 try:
                     pfd_row.append(header_list[header_list.index("gid")+1]) #add gene ID if known
                 except ValueError:
@@ -451,12 +451,12 @@ def domtable_parser(gbk, dom_file):
                 # pfd_row.append(loc_split[1]) #add direction          
                 #===================================================================
                 
-                pfd_row.append(splitline[1]) #pfam id
-                pfd_row.append(splitline[0]) #domain name
+                pfd_row.append(splitline[4]) #pfam id
+                pfd_row.append(splitline[3]) #domain name
                 pfd_row.append(header_list[header_list.index("loc")+1]) #start coordinate of gene
                 pfd_row.append(header_list[header_list.index("loc")+2]) #end coordinate of gene
                 
-                pfd_row.append(splitline[3])#cds header
+                pfd_row.append(splitline[0])#cds header
                 pfd_matrix.append(pfd_row)
 
     return pfd_matrix

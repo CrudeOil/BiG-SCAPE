@@ -1267,7 +1267,7 @@ def runHmmScan(fastaPath, hmmPath, outputdir, verbose):
         name = ".".join(fastaPath.split(os.sep)[-1].split(".")[:-1])
         outputName = os.path.join(outputdir, name+".domtable")
         
-        hmmscan_cmd = "hmmscan --cpu 0 --domtblout {} --cut_tc {} {}".format(outputName, hmmFile, fastaPath)
+        hmmscan_cmd = "hmmsearch --cpu 0 --domtblout {} --cut_tc {} {}".format(outputName, hmmFile, fastaPath)
         if verbose == True:
             print("   " + hmmscan_cmd)
         subprocess.check_output(hmmscan_cmd, shell=True)
