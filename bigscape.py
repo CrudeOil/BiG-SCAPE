@@ -1919,6 +1919,40 @@ def clusterJsonBatch(bgcs, pathBase, className, matrix, pos_alignments, cutoffs=
                     
     return family_data
 
+def writeFamilySummary(network_files_folder):
+    clusteringFiles = glob('*/*clustering*tsv')
+
+    classes = dict()
+    for clusteringfile in clusteringFiles:
+        type = os.path.split(clusteringfile)[0]
+        classes[type] = dict()
+        for line in open(clusteringfile):
+            if not line.startswith('#'):
+                lineParse = line.strip().split()
+                members = classes[type].setdefault(lineParse[1], [])
+                members.append(lineParse[0])
+
+    seenClasses = list()
+    for v in classes.values():
+        for k in v.keys():
+            seenClasses.append(k)
+    output = []
+    for classNum in set(seenClasses):
+        for type,v in classes.items():
+            if classNum in v:
+                output.append((type,classNum,len([x for x in v[classNum] if 'BGC' not in x]),any('BGC' in x for x in v[classNum]),','.join(v[classNum])))
+    #sort first by family number, then by size, then whether or not there's a mibig hit
+
+    output.sort(key=lambda x: x[1])
+    output.sort(key=lambda x: x[2], reverse=True)
+    output.sort(key=lambda x: x[3],reverse=True)
+
+    family_summary_file_name = os.path.join(network_files_folder, "Family_Summary_Full.csv")
+
+    with open(family_summary_file_name,'w') as outfile:
+        outfile.write('# BGC Class, Family, Number of Members, Contains MiBIG, Members\n')
+        for line in output:
+            outfile.write('{},{},{},{}\n'.format(*line))
 
 class FloatRange(object):
     def __init__(self, start, end):
@@ -2058,6 +2092,10 @@ def CMD_parser():
         "store_true", default=False, help="Use included BGCs from then MIBiG \
         database. Only relevant (i.e. those with distance < max(cutoffs) against\
         the input set) will be used. Using version (version 1.3). See https://mibig.secondarymetabolites.org/")
+
+    parser.add_argument("--fam_summary", dest="make_family_summary", action=
+        "store_true", default=False, help="Will generate a csv file after network calculation containing summary of "
+                                          "different family groupings")
      
     parser.add_argument("--query_bgc", help="Instead of making an all-VS-all \
                     comparison of all the input BGCs, choose one BGC to \
@@ -3239,6 +3277,8 @@ if __name__=="__main__":
             family["mibig"] = mibig
             family["members"] = new_members
 
+    if options.make_family_summary:
+        writeFamilySummary(network_files_folder)
 
     # generate overview data
     end_time = time.localtime()
