@@ -1924,7 +1924,7 @@ def writeFamilySummary(network_files_folder):
 
     classes = dict()
     for clusteringfile in clusteringFiles:
-        type = os.path.split(clusteringfile)[0]
+        type = os.path.split(os.path.split(clusteringfile)[0])[1]
         classes[type] = dict()
         for line in open(clusteringfile):
             if not line.startswith('#'):
@@ -1952,7 +1952,7 @@ def writeFamilySummary(network_files_folder):
     with open(family_summary_file_name,'w') as outfile:
         outfile.write('# BGC Class, Family, Number of Members, Contains MiBIG, Members\n')
         for line in output:
-            outfile.write('{},{},{},{}\n'.format(*line))
+            outfile.write('{},{},{},{},{}\n'.format(*line))
 
 class FloatRange(object):
     def __init__(self, start, end):
